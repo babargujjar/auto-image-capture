@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 
-export default function page() {
+export default function Page() {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const audioRef = useRef(null);
@@ -10,9 +10,12 @@ export default function page() {
   const [preview, setPreview] = useState(null);
 
   useEffect(() => {
+    if (typeof navigator === "undefined") return;
     async function initCamera() {
       try {
-        const isMobile = /Mobi|Android/i.test(navigator.userAgent);
+        const isMobile =
+          typeof navigator !== "undefined" &&
+          /Mobi|Android/i.test(navigator.userAgent);
 
         const constraints = {
           video: isMobile
@@ -56,10 +59,10 @@ export default function page() {
     const imageData = canvasRef.current.toDataURL("image/png");
 
     // 🔊 Play shutter sound
-    if (audioRef.current) {
-      audioRef.current.currentTime = 0;
-      audioRef.current.play();
-    }
+    // if (audioRef.current) {
+    //   audioRef.current.currentTime = 0;
+    //   audioRef.current.play();
+    // }
 
     // ⚡ Flash effect
     setFlash(true);
