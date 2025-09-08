@@ -4,23 +4,21 @@ import { useEffect, useRef, useState } from "react";
 export default function Page() {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
-  const audioRef = useRef(null);
 
   const [flash, setFlash] = useState(false);
   const [preview, setPreview] = useState(null);
+  const [isCapturing, setIsCapturing] = useState(true);
+  const intervalRef = useRef(null);
 
   useEffect(() => {
     if (typeof navigator === "undefined") return;
+
     async function initCamera() {
       try {
-        const isMobile =
-          typeof navigator !== "undefined" &&
-          /Mobi|Android/i.test(navigator.userAgent);
+        const isMobile = /Mobi|Android/i.test(navigator.userAgent);
 
         const constraints = {
-          video: isMobile
-            ? { facingMode: { exact: "environment" } } // 📱 Mobile back cam
-            : true, // 💻 Desktop cam
+          video: isMobile ? { facingMode: "environment" } : true,
         };
 
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
@@ -28,12 +26,11 @@ export default function Page() {
           videoRef.current.srcObject = stream;
         }
 
-        const interval = setInterval(() => {
-          captureImage();
-        }, 5000);
+        
+        startCapturing();
 
         return () => {
-          clearInterval(interval);
+          stopCapturing();
           stream.getTracks().forEach((track) => track.stop());
         };
       } catch (err) {
@@ -43,6 +40,20 @@ export default function Page() {
 
     initCamera();
   }, []);
+
+  const startCapturing = () => {
+    if (intervalRef.current) return; 
+    intervalRef.current = setInterval(() => {
+      captureImage();
+    }, 5000);
+    setIsCapturing(true);
+  };
+
+  const stopCapturing = () => {
+    clearInterval(intervalRef.current);
+    intervalRef.current = null;
+    setIsCapturing(false);
+  };
 
   const captureImage = async () => {
     if (!videoRef.current || !canvasRef.current) return;
@@ -58,37 +69,46 @@ export default function Page() {
 
     const imageData = canvasRef.current.toDataURL("image/png");
 
-    // 🔊 Play shutter sound
-    // if (audioRef.current) {
-    //   audioRef.current.currentTime = 0;
-    //   audioRef.current.play();
-    // }
-
-    // ⚡ Flash effect
     setFlash(true);
     setTimeout(() => setFlash(false), 200);
 
-    // 🖼️ Show preview for 1 sec
     setPreview(imageData);
     setTimeout(() => setPreview(null), 1000);
 
     console.log("📸 Captured:", imageData.substring(0, 50));
 
-    // Send to API
-    // try {
-    //   await fetch("/api/upload-image", {
-    //     method: "POST",
-    //     headers: { "Content-Type": "application/json" },
-    //     body: JSON.stringify({ image: imageData }),
-    //   });
-    // } catch (error) {
-    //   console.error("❌ Upload failed:", error);
-    // }
+    // 📍 Location
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        await saveToSupabase(
+          imageData,
+          pos.coords.latitude,
+          pos.coords.longitude
+        );
+      },
+      async () => {
+        await saveToSupabase(imageData, null, null);
+      }
+    );
   };
+
+  async function saveToSupabase(image, latitude, longitude) {
+    try {
+      const res = await fetch("/api/upload-image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image, latitude, longitude }),
+      });
+      const data = await res.json();
+      console.log("✅ Uploaded:", data);
+    } catch (error) {
+      console.error("❌ Upload failed:", error);
+    }
+  }
 
   return (
     <div className="relative w-full h-screen bg-black overflow-hidden">
-      {/* 🎥 Live Camera */}
+      {/* 🎥 Camera */}
       <video
         ref={videoRef}
         autoPlay
@@ -96,19 +116,14 @@ export default function Page() {
         muted
         className="w-full h-full object-cover"
       />
-
-      {/* Hidden canvas */}
       <canvas ref={canvasRef} width={1280} height={720} className="hidden" />
 
-      {/* 🔊 Shutter sound */}
-      {/* <audio ref={audioRef} src="/shutter.mp3" preload="auto" /> */}
-
-      {/* ⚡ Flash overlay */}
+      {/* ⚡ Flash */}
       {flash && (
         <div className="absolute inset-0 bg-white opacity-80 animate-pulse" />
       )}
 
-      {/* 🖼️ Preview image */}
+      {/* 🖼️ Preview */}
       {preview && (
         <img
           src={preview}
@@ -116,6 +131,25 @@ export default function Page() {
           className="absolute bottom-4 right-4 w-32 h-20 rounded-lg border-2 border-white shadow-lg"
         />
       )}
+
+      {/* 🎛️ Stop / Resume Button */}
+      <div className="absolute top-4 left-1/2 transform -translate-x-1/2">
+        {isCapturing ? (
+          <button
+            onClick={stopCapturing}
+            className="px-4 py-2 bg-red-600 text-white font-bold rounded-lg shadow-lg"
+          >
+            ⏸ Stop Capturing
+          </button>
+        ) : (
+          <button
+            onClick={startCapturing}
+            className="px-4 py-2 bg-green-600 text-white font-bold rounded-lg shadow-lg"
+          >
+            ▶ Resume Capturing
+          </button>
+        )}
+      </div>
     </div>
   );
 }
