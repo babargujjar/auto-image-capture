@@ -12,8 +12,9 @@ export default function Page() {
   const [modelsLoaded, setModelsLoaded] = useState(false);
   const [faceMatcher, setFaceMatcher] = useState(null);
 
-  // 🟢 NEW: recognition lock
+  // 🟢 NEW
   const [isProcessing, setIsProcessing] = useState(false);
+  const [recognitionResult, setRecognitionResult] = useState(null); // ✅/❌ display
 
   // Load models
   useEffect(() => {
@@ -36,9 +37,7 @@ export default function Page() {
         video: isMobile ? { facingMode: "environment" } : true,
       };
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-      }
+      if (videoRef.current) videoRef.current.srcObject = stream;
     } catch (err) {
       console.error("Camera error:", err);
     }
@@ -92,22 +91,21 @@ export default function Page() {
     loadLabeledImages();
   }, [modelsLoaded]);
 
-  // 🟢 Face detection loop
+  // Face detection loop
   useEffect(() => {
     if (!modelsLoaded) return;
 
     const detectFaces = async () => {
-      if (isProcessing) return; // ⛔ skip if already processing
+      if (isProcessing) return;
       if (videoRef.current && canvasRef.current) {
         const detections = await faceapi.detectAllFaces(
           videoRef.current,
           new faceapi.TinyFaceDetectorOptions()
         );
-
         if (detections.length > 0) {
           console.log("👤 Face detected!");
-          setIsProcessing(true); // lock lagao
-          await captureImage(); // recognition bhi isi me hoga
+          setIsProcessing(true);
+          await captureImage();
         }
       }
     };
@@ -116,7 +114,7 @@ export default function Page() {
     return () => clearInterval(interval);
   }, [modelsLoaded, faceMatcher, isProcessing]);
 
-  // 🟢 Capture + Recognize
+  // Capture + Recognize
   const captureImage = async () => {
     if (!videoRef.current || !canvasRef.current) return;
 
@@ -136,7 +134,8 @@ export default function Page() {
     setPreview(imageData);
     setCapturedImage(imageData);
 
-    // 🔍 Recognition
+    let resultText = "❌ Unknown";
+
     if (faceMatcher) {
       const img = await faceapi.fetchImage(imageData);
       const detection = await faceapi
@@ -148,13 +147,17 @@ export default function Page() {
         const bestMatch = faceMatcher.findBestMatch(detection.descriptor);
         if (bestMatch.label !== "unknown") {
           console.log("✅ Known Person:", bestMatch.label);
+          resultText = `✅ Known: ${bestMatch.label}`;
         } else {
           console.log("❌ Unknown Person");
+          resultText = "❌ Unknown";
         }
       } else {
         console.log("⚠️ No face detected in captured image");
+        resultText = "⚠️ No face detected";
       }
     }
+    // 🔍 Recognition
     // if (faceMatcher) {
     //   const img = await faceapi.fetchImage(imageData);
     //   const detection = await faceapi
@@ -164,21 +167,19 @@ export default function Page() {
 
     //   if (detection) {
     //     const bestMatch = faceMatcher.findBestMatch(detection.descriptor);
-
-    //     // 👇 strict distance check
-    //     if (bestMatch.distance < 0.4) {
-    //       // lower = more strict
+    //     if (bestMatch.label !== "unknown") {
     //       console.log("✅ Known Person:", bestMatch.label);
     //     } else {
-    //       console.log("❌ Unknown Person (too far)");
+    //       console.log("❌ Unknown Person");
     //     }
     //   } else {
     //     console.log("⚠️ No face detected in captured image");
     //   }
     // }
 
-    // 🔓 Unlock only after recognition finishes
+    setRecognitionResult(resultText);
 
+    // Unlock only after result is set
     setIsProcessing(false);
   };
 
@@ -193,10 +194,12 @@ export default function Page() {
       />
       <canvas ref={canvasRef} width={1280} height={720} className="hidden" />
 
+      {/* Flash */}
       {flash && (
         <div className="absolute inset-0 bg-white opacity-80 animate-pulse" />
       )}
 
+      {/* Preview */}
       {preview && (
         <img
           src={preview}
@@ -205,6 +208,14 @@ export default function Page() {
         />
       )}
 
+      {/* Top-right recognition result */}
+      {recognitionResult && (
+        <div className="absolute top-4 right-4 bg-black/70 text-white px-4 py-2 rounded-lg font-semibold shadow-lg">
+          {recognitionResult}
+        </div>
+      )}
+
+      {/* Debug info */}
       {capturedImage && (
         <div className="absolute bottom-4 left-4 bg-white text-black p-2 rounded">
           ✅ Face Captured & Checked
