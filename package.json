@@ -9,7 +9,9 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.57.2",
+      "@supabase/supabase-js": "^2.57.2",
+    "@tensorflow/tfjs": "^3.18.0",
+    "face-api.js": "^0.22.2",
     "next": "15.5.2",
     "react": "19.1.0",
     "react-dom": "19.1.0"

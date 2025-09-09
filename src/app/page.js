@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import * as faceapi from "face-api.js";
 
 export default function Page() {
   const videoRef = useRef(null);
@@ -7,54 +8,115 @@ export default function Page() {
 
   const [flash, setFlash] = useState(false);
   const [preview, setPreview] = useState(null);
-  const [isCapturing, setIsCapturing] = useState(true);
-  const intervalRef = useRef(null);
+  const [capturedImage, setCapturedImage] = useState(null);
+  const [modelsLoaded, setModelsLoaded] = useState(false);
+  const [faceMatcher, setFaceMatcher] = useState(null);
 
+  // 🟢 NEW: recognition lock
+  const [isProcessing, setIsProcessing] = useState(false);
+
+  // Load models
   useEffect(() => {
-    if (typeof navigator === "undefined") return;
+    async function loadModels() {
+      const MODEL_URL = "/models";
+      await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+      await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+      await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
+      setModelsLoaded(true);
+      console.log("✅ FaceAPI Models Loaded");
+      initCamera();
+    }
+    loadModels();
+  }, []);
 
-    async function initCamera() {
+  const initCamera = async () => {
+    try {
+      const isMobile = /Mobi|Android/i.test(navigator.userAgent);
+      const constraints = {
+        video: isMobile ? { facingMode: "environment" } : true,
+      };
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+      }
+    } catch (err) {
+      console.error("Camera error:", err);
+    }
+  };
+
+  // Load known images
+  useEffect(() => {
+    if (!modelsLoaded) return;
+
+    async function loadLabeledImages() {
       try {
-        const isMobile = /Mobi|Android/i.test(navigator.userAgent);
+        const res = await fetch("/api/upload-image");
+        const data = await res.json();
+        const photos = data.data;
 
-        const constraints = {
-          video: isMobile ? { facingMode: "environment" } : true,
-        };
+        const labeledDescriptors = [];
+        for (let photo of photos) {
+          try {
+            const img = await faceapi.fetchImage(photo.image_url);
+            const detection = await faceapi
+              .detectSingleFace(img, new faceapi.TinyFaceDetectorOptions())
+              .withFaceLandmarks()
+              .withFaceDescriptor();
 
-        const stream = await navigator.mediaDevices.getUserMedia(constraints);
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
+            if (detection) {
+              labeledDescriptors.push(
+                new faceapi.LabeledFaceDescriptors(photo.id.toString(), [
+                  detection.descriptor,
+                ])
+              );
+            }
+          } catch (err) {
+            console.error("Error loading image:", photo.image_url, err);
+          }
         }
 
-        
-        startCapturing();
-
-        return () => {
-          stopCapturing();
-          stream.getTracks().forEach((track) => track.stop());
-        };
+        if (labeledDescriptors.length > 0) {
+          const matcher = new faceapi.FaceMatcher(labeledDescriptors, 0.6);
+          setFaceMatcher(matcher);
+          console.log(
+            "✅ Face Matcher Ready with",
+            labeledDescriptors.length,
+            "faces"
+          );
+        }
       } catch (err) {
-        console.error("Camera error:", err);
+        console.error("API fetch error:", err);
       }
     }
 
-    initCamera();
-  }, []);
+    loadLabeledImages();
+  }, [modelsLoaded]);
 
-  const startCapturing = () => {
-    if (intervalRef.current) return; 
-    intervalRef.current = setInterval(() => {
-      captureImage();
-    }, 5000);
-    setIsCapturing(true);
-  };
+  // 🟢 Face detection loop
+  useEffect(() => {
+    if (!modelsLoaded) return;
 
-  const stopCapturing = () => {
-    clearInterval(intervalRef.current);
-    intervalRef.current = null;
-    setIsCapturing(false);
-  };
+    const detectFaces = async () => {
+      if (isProcessing) return; // ⛔ skip if already processing
+      if (videoRef.current && canvasRef.current) {
+        const detections = await faceapi.detectAllFaces(
+          videoRef.current,
+          new faceapi.TinyFaceDetectorOptions()
+        );
 
+        if (detections.length > 0) {
+          console.log("👤 Face detected!");
+          setIsProcessing(true); // lock lagao
+          await captureImage(); // recognition bhi isi me hoga
+        }
+      }
+    };
+
+    const interval = setInterval(detectFaces, 1500);
+    return () => clearInterval(interval);
+  }, [modelsLoaded, faceMatcher, isProcessing]);
+
+  // 🟢 Capture + Recognize
   const captureImage = async () => {
     if (!videoRef.current || !canvasRef.current) return;
 
@@ -68,47 +130,60 @@ export default function Page() {
     );
 
     const imageData = canvasRef.current.toDataURL("image/png");
-
     setFlash(true);
     setTimeout(() => setFlash(false), 200);
 
     setPreview(imageData);
-    setTimeout(() => setPreview(null), 1000);
+    setCapturedImage(imageData);
 
-    console.log("📸 Captured:", imageData.substring(0, 50));
+    // 🔍 Recognition
+    if (faceMatcher) {
+      const img = await faceapi.fetchImage(imageData);
+      const detection = await faceapi
+        .detectSingleFace(img, new faceapi.TinyFaceDetectorOptions())
+        .withFaceLandmarks()
+        .withFaceDescriptor();
 
-    // 📍 Location
-    navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        await saveToSupabase(
-          imageData,
-          pos.coords.latitude,
-          pos.coords.longitude
-        );
-      },
-      async () => {
-        await saveToSupabase(imageData, null, null);
+      if (detection) {
+        const bestMatch = faceMatcher.findBestMatch(detection.descriptor);
+        if (bestMatch.label !== "unknown") {
+          console.log("✅ Known Person:", bestMatch.label);
+        } else {
+          console.log("❌ Unknown Person");
+        }
+      } else {
+        console.log("⚠️ No face detected in captured image");
       }
-    );
-  };
-
-  async function saveToSupabase(image, latitude, longitude) {
-    try {
-      const res = await fetch("/api/upload-image", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image, latitude, longitude }),
-      });
-      const data = await res.json();
-      console.log("✅ Uploaded:", data);
-    } catch (error) {
-      console.error("❌ Upload failed:", error);
     }
-  }
+    // if (faceMatcher) {
+    //   const img = await faceapi.fetchImage(imageData);
+    //   const detection = await faceapi
+    //     .detectSingleFace(img, new faceapi.TinyFaceDetectorOptions())
+    //     .withFaceLandmarks()
+    //     .withFaceDescriptor();
+
+    //   if (detection) {
+    //     const bestMatch = faceMatcher.findBestMatch(detection.descriptor);
+
+    //     // 👇 strict distance check
+    //     if (bestMatch.distance < 0.4) {
+    //       // lower = more strict
+    //       console.log("✅ Known Person:", bestMatch.label);
+    //     } else {
+    //       console.log("❌ Unknown Person (too far)");
+    //     }
+    //   } else {
+    //     console.log("⚠️ No face detected in captured image");
+    //   }
+    // }
+
+    // 🔓 Unlock only after recognition finishes
+
+    setIsProcessing(false);
+  };
 
   return (
     <div className="relative w-full h-screen bg-black overflow-hidden">
-      {/* 🎥 Camera */}
       <video
         ref={videoRef}
         autoPlay
@@ -118,12 +193,10 @@ export default function Page() {
       />
       <canvas ref={canvasRef} width={1280} height={720} className="hidden" />
 
-      {/* ⚡ Flash */}
       {flash && (
         <div className="absolute inset-0 bg-white opacity-80 animate-pulse" />
       )}
 
-      {/* 🖼️ Preview */}
       {preview && (
         <img
           src={preview}
@@ -132,24 +205,11 @@ export default function Page() {
         />
       )}
 
-      {/* 🎛️ Stop / Resume Button */}
-      <div className="absolute top-4 left-1/2 transform -translate-x-1/2">
-        {isCapturing ? (
-          <button
-            onClick={stopCapturing}
-            className="px-4 py-2 bg-red-600 text-white font-bold rounded-lg shadow-lg"
-          >
-            ⏸ Stop Capturing
-          </button>
-        ) : (
-          <button
-            onClick={startCapturing}
-            className="px-4 py-2 bg-green-600 text-white font-bold rounded-lg shadow-lg"
-          >
-            ▶ Resume Capturing
-          </button>
-        )}
-      </div>
+      {capturedImage && (
+        <div className="absolute bottom-4 left-4 bg-white text-black p-2 rounded">
+          ✅ Face Captured & Checked
+        </div>
+      )}
     </div>
   );
 }

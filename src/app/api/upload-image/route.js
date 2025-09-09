@@ -63,3 +63,20 @@ export async function POST(req) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
+
+export async function GET() {
+  try {
+    // Fetch all photos
+    const { data, error } = await supabase
+      .from("photos")
+      .select("*")
+      .order("created_at", { ascending: false }); // latest first (agar created_at column hai)
+
+    if (error) throw error;
+
+    return NextResponse.json({ success: true, data });
+  } catch (error) {
+    console.error("Fetch error:", error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+}
